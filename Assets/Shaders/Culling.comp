@@ -1,0 +1,125 @@
+#version 460 core
+#extension GL_ARB_separate_shader_objects : enable
+
+layout(local_size_x = 1024) in;
+
+struct DrawElementsIndirectCommand {
+    uint Count;
+    uint InstanceCount;
+    uint FirstIndex;
+    uint BaseVertex;
+    uint BaseInstance;
+};
+
+struct MeshLODProperty {
+    uint BaseVertex;
+    uint BaseIndex;
+    uint IndexCount;
+    uint _padding;
+};
+
+struct MeshProperty {
+    MeshLODProperty LODs[4];
+    vec4 BSphere;
+};
+
+layout(std430, binding = 1) buffer InstanceBlock {
+    mat4 modelMatrices[];
+};
+
+layout(std430, binding = 2) buffer IndirectBlock {
+    DrawElementsIndirectCommand cmds[];
+};
+
+layout(std430, binding = 3) buffer DrawablesBlock {
+    uvec2 drawables[];
+};
+
+layout(std430, binding = 6) buffer MeshPropertyBlock {
+    MeshProperty meshProperties[];
+};
+
+layout(location = 0) uniform float FieldOfView = 0.0f;
+layout(location = 1) uniform float AspectRatio = 0.0f;
+layout(location = 2) uniform float ZNear = 0.0f;
+layout(location = 3) uniform float ZFar = 0.0f;
+layout(location = 4) uniform mat4 view;
+layout(location = 5) uniform int defaultVisble = 0;
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+
+    if (index >= modelMatrices.length())
+        return;
+
+    if (index >= cmds.length())
+        return;
+
+    if (index >= drawables.length())
+        return;
+
+    uint meshindex = drawables[index].y;
+    if (meshindex >= meshProperties.length())
+        return;
+
+    MeshProperty meshProperty = meshProperties[meshindex];
+
+    vec3 center = meshProperty.BSphere.xyz;
+    float radius = meshProperty.BSphere.w;
+
+    vec3 position = (view * modelMatrices[index] * vec4(center, 1.0)).xyz;
+
+    float A = 1.0f / tan(FieldOfView * AspectRatio / 2.0f);
+    float B = 1.0f / tan(FieldOfView / 2.0f);
+
+    vec3 normal_L = normalize(vec3(-A, 0, 1));
+    vec3 normal_R = normalize(vec3(+A, 0, 1));
+    vec3 normal_T = normalize(vec3(0, +B, 1));
+    vec3 normal_B = normalize(vec3(0, -B, 1));
+
+    float distance_L = dot(position, normal_L);
+    float distance_R = dot(position, normal_R);
+    float distance_T = dot(position, normal_T);
+    float distance_B = dot(position, normal_B);
+
+    // hidden by default
+    cmds[index].InstanceCount = defaultVisble;
+
+    if (distance_L > radius)
+        return;
+
+    if (distance_R > radius)
+        return;
+
+    if (distance_T > radius)
+        return;
+
+    if (distance_B > radius)
+        return;
+
+    uint lodCount = 0;
+
+    // visible
+    cmds[index].InstanceCount = 1;
+    for (uint lod = 0; lod < 4; lod++) {
+        if (meshProperty.LODs[lod].IndexCount == 0)
+            break;
+
+        lodCount++;
+    }
+
+    if (lodCount == 0)
+        return;
+
+    // select LOD
+    uint lod = uint(0.1f * length(position) / radius);
+    lod = clamp(lod, 0, lodCount - 1);
+
+    cmds[index].InstanceCount = 1;
+    cmds[index].BaseInstance = index;
+    cmds[index].BaseVertex = meshProperty.LODs[lod].BaseVertex;
+    cmds[index].FirstIndex = meshProperty.LODs[lod].BaseIndex;
+    cmds[index].Count = meshProperty.LODs[lod].IndexCount;
+
+    drawables[index].x = lod;
+}
