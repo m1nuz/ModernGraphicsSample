@@ -64,8 +64,10 @@ void main() {
 
     MeshProperty meshProperty = meshProperties[meshindex];
 
+    vec3 scale = vec3(modelMatrices[index][0][0], modelMatrices[index][1][1], modelMatrices[index][2][2]);
+
     vec3 center = meshProperty.BSphere.xyz;
-    float radius = meshProperty.BSphere.w;
+    float radius = meshProperty.BSphere.w * max(scale.x, max(scale.y, scale.z));
 
     vec3 position = (view * modelMatrices[index] * vec4(center, 1.0)).xyz;
 
@@ -112,7 +114,8 @@ void main() {
         return;
 
     // select LOD
-    uint lod = uint(0.1f * length(position) / radius);
+    uint lod = uint(0.2f * length(position) / radius);
+    // lod = 3;
     lod = clamp(lod, 0, lodCount - 1);
 
     cmds[index].InstanceCount = 1;
@@ -121,5 +124,5 @@ void main() {
     cmds[index].FirstIndex = meshProperty.LODs[lod].BaseIndex;
     cmds[index].Count = meshProperty.LODs[lod].IndexCount;
 
-    drawables[index].x = lod;
+    // drawables[index].x = lod;
 }

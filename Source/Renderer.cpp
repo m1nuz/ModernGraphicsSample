@@ -230,7 +230,7 @@ static auto updateLightBuffer(Device& device) {
     glNamedBufferData(lightBuffer.id, std::size(device.lights_) * sizeof(Light), std::data(device.lights_), GL_DYNAMIC_DRAW);
 }
 
-auto present(Device& device, Camera& camera, std::span<const Object> objects) -> void {
+auto present(Device& device, Camera& camera, std::span<const Entity> entities) -> void {
     assert(!device.framebuffers_.empty());
 
     const float aspectRation = static_cast<float>(device.framebuffers_[0].width) / static_cast<float>(device.framebuffers_[0].height);
@@ -245,11 +245,12 @@ auto present(Device& device, Camera& camera, std::span<const Object> objects) ->
     device.modelMatrices_.clear();
     device.drawables_.clear();
 
-    for (size_t i = 0; i < std::size(objects); i++) {
-        const auto& object = objects[i];
-
-        device.modelMatrices_.push_back(object.transform);
-        device.drawables_.emplace_back(object.materialRef, object.meshRef);
+    for (size_t i = 0; i < std::size(entities); i++) {
+        const auto& model = device.models_[entities[i].modelRef];
+        for (size_t j = 0; j < std::size(model.meshes); j++) {
+            device.modelMatrices_.push_back(entities[i].transform);
+            device.drawables_.emplace_back(model.meshes[j].meshRef, model.meshes[j].materialRef);
+        }
     }
 
     int32_t instanceCount = static_cast<int32_t>(std::size(device.drawables_));

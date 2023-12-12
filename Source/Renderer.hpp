@@ -29,11 +29,9 @@ struct Camera {
         return glm::perspective(glm::radians(fieldOfView), aspectRation, nearPlane, farPlane);
     }
 };
-
-struct Object {
+struct Entity {
     mat4 transform { 1.f };
-    uint32_t meshRef { 0xffffffff };
-    uint32_t materialRef { 0xffffffff };
+    uint32_t modelRef { 0xffffffff };
 };
 
 struct Drawable {
@@ -53,12 +51,14 @@ struct Device {
     std::vector<Buffer> buffers_;
     std::vector<Framebuffer> framebuffers_;
 
+    std::vector<Model> models_;
+
     std::vector<Vertex> vertices_;
     std::vector<uint32_t> indices_;
     std::vector<Material> materials_;
+    std::vector<uint64_t> textureHandles_;
     std::vector<MeshProperty> meshProperties_;
     std::vector<Light> lights_;
-    std::vector<uint64_t> textureHandles_;
 
     std::vector<mat4> modelMatrices_;
     std::vector<Drawable> drawables_;
@@ -96,7 +96,7 @@ struct DeviceConfiguration {
 
 auto initialize(Device& device, const DeviceConfiguration& conf) -> bool;
 auto cleanup(Device& device) -> void;
-auto present(Device& device, Camera& camera, std::span<const Object> objects) -> void;
+auto present(Device& device, Camera& camera, std::span<const Entity> entities) -> void;
 auto resize(Device& device, const ivec2& framebufferSize) -> void;
 
 } // namespace Graphics

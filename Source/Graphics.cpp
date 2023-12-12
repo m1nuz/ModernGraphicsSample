@@ -151,6 +151,86 @@ inline auto shaderStage(ShaderStage stage) -> GLenum {
     return GL_NONE;
 }
 
+inline auto applyTextureFitering(uint32_t id, const TextureFiltering filtering, const int32_t levels) {
+    int32_t maxLevels = levels;
+
+    switch (filtering) {
+    case TextureFiltering::None:
+        break;
+    case TextureFiltering::Nearest:
+        glTextureParameteri(id, GL_TEXTURE_BASE_LEVEL, 0);
+        glTextureParameteri(id, GL_TEXTURE_MAX_LEVEL, maxLevels);
+        glTextureParameteri(id, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTextureParameteri(id, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        break;
+    case TextureFiltering::Bilinear:
+        glTextureParameteri(id, GL_TEXTURE_BASE_LEVEL, 0);
+        glTextureParameteri(id, GL_TEXTURE_MAX_LEVEL, maxLevels);
+        glTextureParameteri(id, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTextureParameteri(id, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        break;
+    case TextureFiltering::Trilinear:
+        glTextureParameteri(id, GL_TEXTURE_BASE_LEVEL, 0);
+        glTextureParameteri(id, GL_TEXTURE_MAX_LEVEL, maxLevels);
+        glTextureParameteri(id, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTextureParameteri(id, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        break;
+    case TextureFiltering::Anisotropic:
+        glTextureParameteri(id, GL_TEXTURE_BASE_LEVEL, 0);
+        glTextureParameteri(id, GL_TEXTURE_MAX_LEVEL, maxLevels);
+        glTextureParameteri(id, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTextureParameteri(id, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTextureParameterf(id, GL_TEXTURE_MAX_ANISOTROPY, 16.0f);
+        break;
+    default:
+        break;
+    }
+}
+
+inline auto applyTextureWrap(uint32_t id, TextureWrap wrapping, bool wrapR = false) {
+    switch (wrapping) {
+    case TextureWrap::None:
+        break;
+    case TextureWrap::ClampToEdge:
+        glTextureParameteri(id, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTextureParameteri(id, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        if (wrapR) {
+            glTextureParameteri(id, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+        }
+        break;
+    case TextureWrap::ClampToBorder:
+        glTextureParameteri(id, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+        glTextureParameteri(id, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+        if (wrapR) {
+            glTextureParameteri(id, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_BORDER);
+        }
+        break;
+    case TextureWrap::MirroredRepeat:
+        glTextureParameteri(id, GL_TEXTURE_WRAP_S, GL_MIRRORED_REPEAT);
+        glTextureParameteri(id, GL_TEXTURE_WRAP_T, GL_MIRRORED_REPEAT);
+        if (wrapR) {
+            glTextureParameteri(id, GL_TEXTURE_WRAP_R, GL_MIRRORED_REPEAT);
+        }
+        break;
+    case TextureWrap::Repeat:
+        glTextureParameteri(id, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        glTextureParameteri(id, GL_TEXTURE_WRAP_T, GL_REPEAT);
+        if (wrapR) {
+            glTextureParameteri(id, GL_TEXTURE_WRAP_R, GL_REPEAT);
+        }
+        break;
+    case TextureWrap::MirrorClampToEdge:
+        glTextureParameteri(id, GL_TEXTURE_WRAP_S, GL_MIRROR_CLAMP_TO_EDGE);
+        glTextureParameteri(id, GL_TEXTURE_WRAP_T, GL_MIRROR_CLAMP_TO_EDGE);
+        if (wrapR) {
+            glTextureParameteri(id, GL_TEXTURE_WRAP_R, GL_MIRROR_CLAMP_TO_EDGE);
+        }
+        break;
+    default:
+        break;
+    }
+}
+
 auto findShader(Device& device, uint64_t tag) -> Shader {
     for (const auto& s : device.shaders_) {
         if (s.tag == tag) {
@@ -181,6 +261,19 @@ auto findTexture(Device& device, uint64_t tag) -> Texture {
     return {};
 }
 
+auto findTextureHandleRef(Device& device, uint64_t handle) -> uint32_t {
+    uint32_t idx = 0;
+    for (const auto& h : device.textureHandles_) {
+        if (handle == h) {
+            return idx;
+        }
+
+        idx++;
+    }
+
+    return idx;
+}
+
 auto findBuffer(Device& device, uint64_t tag) -> Buffer {
     for (const auto& b : device.buffers_) {
         if (b.tag == tag) {
@@ -189,6 +282,18 @@ auto findBuffer(Device& device, uint64_t tag) -> Buffer {
     }
 
     return {};
+}
+
+auto findModelRef(Device& device, uint64_t tag) -> uint32_t {
+    uint32_t idx = 0;
+    for (const auto& m : device.models_) {
+        if (m.tag == tag) {
+            return idx;
+        }
+        idx++;
+    }
+
+    return idx;
 }
 
 auto loadPipeline(Device& device, uint64_t tag, std::span<const std::string_view> shaderNames) -> void {
@@ -224,13 +329,8 @@ auto createTexture2D(Device& device, const TextureConfiguration& conf) -> Textur
         glTextureSubImage2D(id, 0, 0, 0, conf.width, conf.height, format, type, std::data(conf.pixels));
     }
 
-    glTextureParameteri(id, GL_TEXTURE_BASE_LEVEL, 0);
-    glTextureParameteri(id, GL_TEXTURE_MAX_LEVEL, mipLevels);
-    glTextureParameteri(id, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTextureParameteri(id, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-
-    glTextureParameteri(id, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTextureParameteri(id, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    applyTextureFitering(id, conf.filter, mipLevels);
+    applyTextureWrap(id, conf.wrap, false);
 
     if (conf.generateMipMaps) {
         glGenerateTextureMipmap(id);
@@ -240,6 +340,8 @@ auto createTexture2D(Device& device, const TextureConfiguration& conf) -> Textur
     if (conf.bindless) {
         handle = glGetTextureHandleARB(id);
         glMakeTextureHandleResidentARB(handle);
+
+        device.textureHandles_.push_back(handle);
     }
 
     return device.textures_.emplace_back(conf.tag, id, GL_TEXTURE_2D, conf.width, conf.height, 0, mipLevels, handle);
@@ -375,7 +477,7 @@ auto loadTexture(Device& device, std::string_view filepath) -> void {
 
     size_t size = width * height * channels;
 
-    auto texture = createTexture2D(device,
+    [[maybe_unused]] auto texture = createTexture2D(device,
         { .tag = make_hash(filepath),
             .width = static_cast<uint32_t>(width),
             .height = static_cast<uint32_t>(height),
@@ -385,9 +487,9 @@ auto loadTexture(Device& device, std::string_view filepath) -> void {
             .bindless = true,
             .pixels = std::span { ptr, size } });
 
-    if (texture.handle != 0) {
-        device.textureHandles_.push_back(texture.handle);
-    }
+    // if (texture.handle != 0) {
+    //     device.textureHandles_.push_back(texture.handle);
+    // }
 
     stbi_image_free(ptr);
 }
@@ -591,37 +693,37 @@ auto createMesh(Device& device, const CreateMeshConfiguration& conf) -> uint32_t
     return addMesh(device, mesh);
 }
 
-static auto createMaterial(const CreateMaterialConfiguration& conf) -> Material {
-    Material material;
-    material.setKd(conf.Kd);
-    material.setKs(conf.Ks);
-    material.Ns = conf.Ns;
-    material.d = conf.d;
+// static auto createMaterial(const CreateMaterialConfiguration& conf) -> Material {
+//     Material material;
+//     material.setKd(conf.Kd);
+//     material.setKs(conf.Ks);
+//     material.Ns = conf.Ns;
+//     material.d = conf.d;
 
-    return material;
-}
+//     return material;
+// }
 
-auto createMaterial(Device& device, const CreateMaterialConfiguration& conf) -> uint32_t {
-    auto material = createMaterial(conf);
+// auto createMaterial(Device& device, const CreateMaterialConfiguration& conf) -> uint32_t {
+//     auto material = createMaterial(conf);
 
-    if (!conf.KdMap.empty()) {
-        loadTexture(device, conf.KdMap);
+//     if (!conf.KdMapName.empty()) {
+//         loadTexture(device, conf.KdMapName);
 
-        auto KdMap = findTexture(device, make_hash(conf.KdMap));
+//         auto KdMap = findTexture(device, make_hash(conf.KdMapName));
 
-        uint32_t idx = 0;
-        for (auto& KdHandle : device.textureHandles_) {
-            if (KdHandle == KdMap.handle) {
-                break;
-            }
+//         // uint32_t idx = 0;
+//         // for (auto& KdHandle : device.textureHandles_) {
+//         //     if (KdHandle == KdMap.handle) {
+//         //         break;
+//         //     }
 
-            idx++;
-        }
+//         //     idx++;
+//         // }
 
-        material.mapKd = idx;
-    }
+//         material.mapKd = findTextureHandleRef(device, KdMap.handle);
+//     }
 
-    return addMaterial(device, material);
-}
+//     return addMaterial(device, material);
+// }
 
 } // namespace Graphics

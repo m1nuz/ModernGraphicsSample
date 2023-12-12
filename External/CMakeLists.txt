@@ -25,7 +25,25 @@ FetchContent_Declare(
     GIT_TAG v1.90
 )
 
-FetchContent_MakeAvailable(fmt glm stb_image imgui)
+
+FetchContent_Declare(
+    tiny_gltf
+    URL https://raw.githubusercontent.com/syoyo/tinygltf/release/tiny_gltf.h
+    DOWNLOAD_NO_EXTRACT true
+)
+
+FetchContent_Declare(
+    json
+    URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz
+)
+
+FetchContent_Declare(
+    meshoptimizer
+    GIT_REPOSITORY https://github.com/zeux/meshoptimizer.git
+    GIT_TAG v0.20
+)
+
+FetchContent_MakeAvailable(fmt glm stb_image imgui tiny_gltf json meshoptimizer)
 
 add_library(stb_image INTERFACE)
 
@@ -37,6 +55,13 @@ add_library(stb::image
 target_include_directories(stb_image
     INTERFACE
     $<BUILD_INTERFACE:${stb_image_SOURCE_DIR}>
+)
+
+add_library(tiny_gltf INTERFACE)
+
+target_include_directories(tiny_gltf
+    INTERFACE
+    $<BUILD_INTERFACE:${tiny_gltf_SOURCE_DIR}>
 )
 
 add_library(ImGui STATIC 

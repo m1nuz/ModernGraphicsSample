@@ -2,12 +2,32 @@
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_bindless_texture : enable
 
+const float PI = 3.14159265359;
+
+// struct Material {
+//     uint Kd;
+//     uint Ks;
+//     float Ns;
+//     float d;
+//     uint MapKd;
+// };
+
+struct PBRMetallicRoughnessMaterial {
+    vec4 baseColor;
+    float metallicFactor;
+    float roughnessFactor;
+    uint baseColorTexture;
+    uint metallicRoughnessTexture;
+};
+
 struct Material {
-    uint Kd;
-    uint Ks;
-    float Ns;
-    float d;
-    uint MapKd;
+    PBRMetallicRoughnessMaterial pbrMetallicRoughness;
+    uint normalTexture;
+    uint occlusionTexture;
+    uint emissiveTexture;
+    float padding;
+    vec3 emissiveFactor;
+    float emissiveStrength;
 };
 
 struct Light {
@@ -49,26 +69,114 @@ fs_in;
 
 layout(location = 0) out vec4 FragColor;
 
+vec3 getNormalFromMap(vec3 worldPos, vec3 normal, uint material_index) {
+    sampler2D normalMap = sampler2D(textureHandles[materials[material_index].normalTexture]);
+    vec3 tangentNormal = texture(normalMap, fs_in.TexCoord).xyz * 2.0 - 1.0;
+
+    vec3 Q1 = dFdx(worldPos);
+    vec3 Q2 = dFdy(worldPos);
+    vec2 st1 = dFdx(fs_in.TexCoord);
+    vec2 st2 = dFdy(fs_in.TexCoord);
+
+    vec3 N = normalize(normal);
+    vec3 T = normalize(Q1 * st2.t - Q2 * st1.t);
+    vec3 B = -normalize(cross(N, T));
+    mat3 TBN = mat3(T, B, N);
+
+    return normalize(TBN * tangentNormal);
+}
+
+float DistributionGGX(vec3 N, vec3 H, float roughness) {
+    float a = roughness * roughness;
+    float a2 = a * a;
+    float NdotH = max(dot(N, H), 0.0);
+    float NdotH2 = NdotH * NdotH;
+
+    float nom = a2;
+    float denom = (NdotH2 * (a2 - 1.0) + 1.0);
+    denom = PI * denom * denom;
+
+    return nom / denom;
+}
+
+float GeometrySchlickGGX(float NdotV, float roughness) {
+    float r = (roughness + 1.0);
+    float k = (r * r) / 8.0;
+
+    float nom = NdotV;
+    float denom = NdotV * (1.0 - k) + k;
+
+    return nom / denom;
+}
+
+float GeometrySmith(vec3 N, vec3 V, vec3 L, float roughness) {
+    float NdotV = max(dot(N, V), 0.0);
+    float NdotL = max(dot(N, L), 0.0);
+    float ggx2 = GeometrySchlickGGX(NdotV, roughness);
+    float ggx1 = GeometrySchlickGGX(NdotL, roughness);
+
+    return ggx1 * ggx2;
+}
+
+// https://blog.selfshadow.com/publications/s2013-shading-course/karis/s2013_pbs_epic_notes_v2.pdf
+vec3 fresnelSchlick(float cosTheta, vec3 F0) {
+    return max(F0 + (1.0 - F0) * pow(2.0, (-5.55473 * cosTheta - 6.98316) * cosTheta), 0.0);
+}
+
+vec3 CalculateDirectionalLightRadiance(Light light, vec3 albedo, float metallic, float roughness, vec3 F0, vec3 fragPos, vec3 N, vec3 V) {
+    vec3 L = normalize(-light.position);
+    vec3 H = normalize(V + L);
+    vec3 radiance = light.color * light.intensity;
+
+    float NDF = DistributionGGX(N, H, roughness);
+    float G = GeometrySmith(N, V, L, roughness);
+    vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
+
+    vec3 kS = F;
+    vec3 kD = vec3(1.0) - kS;
+    kD *= 1.0 - metallic;
+
+    vec3 numerator = NDF * G * F;
+    float denominator = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.0001;
+    vec3 specular = numerator / denominator;
+
+    float NdotL = max(dot(N, L), 0.0);
+
+    return (kD * albedo / PI + specular) * radiance * NdotL;
+}
+
+vec3 CalculatePointLightRadiance(vec3 albedo, float metallic, float roughness, vec3 F0, vec3 fragPos, vec3 N, vec3 V) {
+    vec3 Lo = vec3(0.0);
+
+    return Lo;
+}
+
 void main() {
     uint material_index = drawables[fs_in.drawID].x;
 
-    sampler2D MapKd = sampler2D(textureHandles[materials[material_index].MapKd]);
+    sampler2D baseColorMap = sampler2D(textureHandles[materials[material_index].pbrMetallicRoughness.baseColorTexture]);
+    sampler2D metallicRoughnessMap = sampler2D(textureHandles[materials[material_index].pbrMetallicRoughness.metallicRoughnessTexture]);
+    sampler2D occlusionMap = sampler2D(textureHandles[materials[material_index].occlusionTexture]);
 
-    vec3 N = normalize(fs_in.Normal);
+    vec3 albedo = texture(baseColorMap, fs_in.TexCoord).rgb;
+    float metallic = texture(metallicRoughnessMap, fs_in.TexCoord).r;
+    float roughness = texture(metallicRoughnessMap, fs_in.TexCoord).g;
+    float occlusion = texture(occlusionMap, fs_in.TexCoord).r;
+
+    // vec3 N = normalize(fs_in.Normal);
+    vec3 N = getNormalFromMap(fs_in.FragPos, fs_in.Normal, material_index);
     vec3 L = normalize(-lights[0].position);
     vec3 R = reflect(-L, N);
     vec3 V = normalize(viewPos - fs_in.FragPos);
 
-    float NdotL = max(dot(N, L), 0.0);
+    vec3 F0 = vec3(0.04);
+    F0 = mix(F0, albedo, metallic);
 
-    vec3 Kd = unpackUnorm4x8(materials[material_index].Kd).rgb * texture(MapKd, fs_in.TexCoord).rgb;
-    vec3 Ks = unpackUnorm4x8(materials[material_index].Ks).rgb;
-    float Ns = clamp(materials[material_index].Ns, 1.0, 1000.0);
-    float d = clamp(materials[material_index].Ns, 0.0, 1.0);
+    vec3 Lo = vec3(0.0);
+    Lo += CalculateDirectionalLightRadiance(lights[0], albedo, metallic, roughness, F0, fs_in.FragPos, N, V);
+    Lo += CalculatePointLightRadiance(albedo, metallic, roughness, F0, fs_in.FragPos, N, V);
 
-    vec3 Ia = lights[0].color * lights[0].intensity * vec3(0.3);
-    vec3 Id = lights[0].color * lights[0].intensity * NdotL;
-    vec3 Is = lights[0].color * lights[0].intensity * max(0, pow(max(0, dot(R, V)), Ns));
+    vec3 Ia = vec3(0.1) * albedo * occlusion;
 
-    FragColor = vec4((Ia + Id) * Kd + Is * Ks, d);
+    FragColor = vec4(Lo + Ia, 1.0);
 }

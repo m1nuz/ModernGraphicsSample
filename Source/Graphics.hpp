@@ -43,6 +43,23 @@ enum class ShaderStage : uint32_t {
     Compute,
 };
 
+enum class TextureFiltering {
+    None,
+    Nearest,
+    Bilinear,
+    Trilinear,
+    Anisotropic,
+};
+
+enum class TextureWrap {
+    None,
+    ClampToEdge,
+    ClampToBorder,
+    MirroredRepeat,
+    Repeat,
+    MirrorClampToEdge,
+};
+
 struct Vertex {
     vec3 position { 0.f };
     vec3 normal { 0.f };
@@ -62,7 +79,22 @@ struct MeshLOD {
 };
 
 struct Mesh {
+    mat4 local { 1.f };
+    uint32_t materialRef { 0xffffffff };
     std::array<MeshLOD, MaxMeshLODs> LODs;
+};
+
+struct Model {
+    uint64_t tag { 0 };
+
+    struct SubMesh {
+        uint32_t parent { 0 };
+        mat4 local { 1.f };
+        uint32_t materialRef { 0xffffffff };
+        uint32_t meshRef { 0xffffffff };
+    };
+
+    std::vector<SubMesh> meshes;
 };
 
 struct MeshLODProperty {
@@ -77,20 +109,22 @@ struct MeshProperty {
     BoundingSphere bSphere;
 };
 
+struct PBRMetallicRoughnessMaterial {
+    vec4 baseColor { 1.f };
+    float metallicFactor { 1.f };
+    float roughnessFactor { 1.f };
+    uint32_t baseColorTexture { 0xffffffff };
+    uint32_t metallicRoughnessTexture { 0xffffffff };
+};
+
 struct Material {
-    uint32_t Kd { 0 };
-    uint32_t Ks { 0 };
-    float Ns { 0.f };
-    float d { 0.f };
-    uint32_t mapKd { 0 };
-
-    auto setKd(const vec3& kd) {
-        Kd = glm::packUnorm4x8(vec4 { kd.x, kd.y, kd.z, 0.f });
-    }
-
-    auto setKs(const vec3& ks) {
-        Ks = glm::packUnorm4x8(vec4 { ks.x, ks.y, ks.z, 0.f });
-    }
+    PBRMetallicRoughnessMaterial pbrMetallicRoughness {};
+    uint32_t normalTexture { 0xffffffff };
+    uint32_t occlusionTexture { 0xffffffff };
+    uint32_t emissiveTexture { 0xffffffff };
+    float padding { 0 };
+    vec3 emissiveFactor { 0.f };
+    float emissiveStrength { 0.f };
 };
 
 struct Light {
@@ -188,7 +222,9 @@ struct TextureConfiguration {
     uint32_t mipLevels { 0 };
     bool generateMipMaps { false };
     bool bindless { false };
-    std::span<uint8_t> pixels {};
+    TextureFiltering filter = TextureFiltering::Nearest;
+    TextureWrap wrap = TextureWrap::None;
+    std::span<const uint8_t> pixels {};
 };
 
 struct ShaderConfiguration {
@@ -219,7 +255,14 @@ struct CreateMaterialConfiguration {
     vec3 Ks { 0.f };
     float Ns { 0.f };
     float d { 0.f };
-    std::string_view KdMap {};
+    std::string_view KdMapName {};
+};
+
+struct CreatePointLight {
+    vec3 position { 0.f };
+    vec3 color { 0.f };
+    float intensity { 0.f };
+    float radius { 0.f };
 };
 
 struct CreateDirectionalLightConfiguration {
@@ -238,7 +281,7 @@ auto createBuffer(Device& device, const BufferConfiguration& conf) -> Buffer;
 auto loadShader(Device& device, std::string_view filepath) -> void;
 auto loadPipeline(Device& device, uint64_t tag, std::span<const std::string_view> shaderNames) -> void;
 auto loadTexture(Device& device, std::string_view filepath) -> void;
-auto loadMesh(Device& device, std::string_view filepath) -> void;
+auto loadModel(Device& device, std::string_view filepath) -> void;
 
 auto addMesh(Device& device, const Mesh& mesh) -> uint32_t;
 auto addMaterial(Device& device, const Material& material) -> uint32_t;
@@ -251,6 +294,8 @@ auto createMaterial(Device& device, const CreateMaterialConfiguration& conf) -> 
 auto findShader(Device& device, uint64_t tag) -> Shader;
 auto findPipeline(Device& device, uint64_t tag) -> Pipeline;
 auto findTexture(Device& device, uint64_t tag) -> Texture;
+auto findTextureHandleRef(Device& device, uint64_t handle) -> uint32_t;
 auto findBuffer(Device& device, uint64_t tag) -> Buffer;
+auto findModelRef(Device& device, uint64_t tag) -> uint32_t;
 
 } // namespace Graphics

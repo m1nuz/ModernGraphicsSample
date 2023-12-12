@@ -1,4 +1,5 @@
 #include "Graphics.hpp"
+#include "Hash.hpp"
 #include "Log.hpp"
 #include "Math.hpp"
 #include "Renderer.hpp"
@@ -115,6 +116,7 @@ int main() {
     glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, debugContext);
     glfwWindowHint(GLFW_RESIZABLE, true);
     glfwWindowHint(GLFW_VISIBLE, false);
+    // glfwWindowHint(GLFW_SAMPLES, 8);
 
     auto monitor = fullscreen ? glfwGetPrimaryMonitor() : nullptr;
     auto window = glfwCreateWindow(windowWidth, windowHeight, "Sample", monitor, nullptr);
@@ -155,7 +157,7 @@ int main() {
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init(glsl_version);
 
-    constexpr int N = 10;
+    constexpr int N = 4;
 
     if (!Graphics::initialize(device, { .window = window, .numObjects = N * N * N })) {
         glfwTerminate();
@@ -164,55 +166,28 @@ int main() {
 
     Graphics::addDirectionalLight(device, { .direction = { 0.f, 10.f, 10.f }, .color = vec3 { 1.f, 1.f, 1.f }, .intensity = 1.f });
 
-    uint32_t cubeRef = Graphics::createMesh(device, { .sphere = 5 });
+    // std::string_view modelName = RESOURCE_PATH "/Models/BoxTextured/BoxTextured.gltf";
+    // std::string_view modelName = RESOURCE_PATH "/Models/Duck/Duck.gltf";
+    // std::string_view modelName = RESOURCE_PATH "/Models/WaterBottle/WaterBottle.gltf";
+    std::string_view modelName = RESOURCE_PATH "/Models/DamagedHelmet/DamagedHelmet.gltf";
 
-    //
-    // http://devernay.free.fr/cours/opengl/materials.html
-    //
-    //  gold
-    uint32_t goldRef = Graphics::createMaterial(device,
-        { .Kd = vec3 { 0.75164, 0.60648, 0.22648 },
-            .Ks = vec3 { 0.628281, 0.555802, 0.366065 },
-            .KdMap = "../../Assets/Textures/texture_09_orange.png" });
-    // copper
-    uint32_t copperRef = Graphics::createMaterial(device,
-        { .Kd = vec3 { 0.7038, 0.27048, 0.0828 },
-            .Ks = vec3 { 0.256777, 0.137622, 0.086014 },
-            .KdMap = "../../Assets/Textures/texture_09_green.png" });
-    // silver
-    uint32_t silverRef = Graphics::createMaterial(device,
-        { .Kd = vec3 { 0.50754, 0.50754, 0.50754 },
-            .Ks = vec3 { 0.508273, 0.508273, 0.508273 },
-            .KdMap = "../../Assets/Textures/texture_07.png" });
-    // chrome
-    uint32_t chromeRef = Graphics::createMaterial(device,
-        { .Kd = vec3 { 0.4, 0.4, 0.4 }, .Ks = vec3 { 0.774597, 0.774597, 0.774597 }, .KdMap = "../../Assets/Textures/texture_08.png" });
+    Graphics::loadModel(device, modelName);
 
-    std::vector<Graphics::Object> objects;
+    std::vector<Graphics::Entity> entities;
+    // Graphics::Entity entity1;
+    // entity1.modelRef = Graphics::findModelRef(device, make_hash(modelName));
+    // entity1.transform = glm::translate(mat4 { 1.f }, vec3(0.f));
+    // entity1.transform = glm::scale(entity1.transform, vec3 { 0.02f });
+    // entities.push_back(entity1);
     for (int x = -N; x <= N; x++) {
         for (int y = -N; y <= N; y++) {
             for (int z = -N; z <= N; z++) {
-                Graphics::Object object;
-                object.transform = glm::translate(mat4 { 1.f }, vec3(x * 1.5f, y * 1.5f, z * 1.5f));
-                object.transform = glm::scale(object.transform, vec3 { 1.f });
-                object.meshRef = cubeRef;
+                Graphics::Entity entity;
+                entity.transform = glm::translate(mat4 { 1.f }, vec3 { x * 1.5f, y * 1.5f, z * 1.5f });
+                entity.transform = glm::scale(entity.transform, vec3 { 0.8f });
+                entity.modelRef = Graphics::findModelRef(device, make_hash(modelName));
 
-                switch ((x + N) % 4) {
-                case 0:
-                    object.materialRef = goldRef;
-                    break;
-                case 1:
-                    object.materialRef = silverRef;
-                    break;
-                case 2:
-                    object.materialRef = copperRef;
-                    break;
-                case 3:
-                    object.materialRef = chromeRef;
-                    break;
-                }
-
-                objects.push_back(object);
+                entities.push_back(entity);
             }
         }
     }
@@ -224,7 +199,7 @@ int main() {
             break;
         }
 
-        Graphics::present(device, camera, objects);
+        Graphics::present(device, camera, entities);
 
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();

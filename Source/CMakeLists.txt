@@ -6,6 +6,7 @@ set(APP_NAME "Sample")
 add_executable(${APP_NAME}
     Renderer.cpp
     Graphics.cpp
+    LoadModel.cpp
     DebugOutput.cpp
     Main.cpp
 )
@@ -37,8 +38,11 @@ target_link_libraries(${APP_NAME}
         glfw
         glm
         stb_image
+        tiny_gltf
         ImGui
         xxhash
+        meshoptimizer
+        nlohmann_json::nlohmann_json
         fmt::fmt
         Threads::Threads
 )
