@@ -7,6 +7,7 @@ add_executable(${APP_NAME}
     Renderer.cpp
     Graphics.cpp
     LoadModel.cpp
+    LoadTexture.cpp
     DebugOutput.cpp
     Main.cpp
 )
@@ -63,4 +64,13 @@ add_shaders(
     Mesh.vert
     Mesh.frag
     Culling.comp
+    PostProcessing.frag
+    PostProcessing.vert
+    Environment.vert
+    Environment.frag
+    Cubemap.vert
+    EquirectangularToCubemap.frag
+    IrradianceConvolution.frag
+    Prefilter.frag
+    BRDF.frag
 )

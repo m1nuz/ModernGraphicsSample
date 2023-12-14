@@ -49,6 +49,7 @@ struct Device {
     std::vector<Shader> shaders_;
     std::vector<Pipeline> pipelines_;
     std::vector<Buffer> buffers_;
+    std::vector<Renderbuffer> renderbuffers_;
     std::vector<Framebuffer> framebuffers_;
 
     std::vector<Model> models_;
@@ -64,14 +65,23 @@ struct Device {
     std::vector<Drawable> drawables_;
 
     uint32_t meshVertexArray { 0 };
+    uint32_t fullscreenQuadVertexArray { 0 };
 
+    float gamma { 2.2f };
+    float exposure { 1.f };
     bool culling { true };
+    bool useBindlessTextures { true };
     int32_t visibleInstances { 0 };
     int32_t drawInstances { 0 };
 
     bool reloadMeshBuffers_ { true };
     bool reloadMaterialBuffers_ { true };
     bool reloadLightBuffers_ { true };
+
+    bool buildedEnvCubemap { false };
+    bool buildedIrradianceCubemap { false };
+    bool buildPrefilterCubemap { false };
+    bool buildBRDFLUTTexture { false };
 
     DebugOutputParams debugOutputParams_;
 };
@@ -91,7 +101,8 @@ struct DeviceConfiguration {
     size_t numMaterials { 0 };
     size_t numMeshes { 0 };
     size_t numLights { 0 };
-    size_t numObjects { 0 };
+    size_t numModels { 0 };
+    size_t numEntities { 0 };
 };
 
 auto initialize(Device& device, const DeviceConfiguration& conf) -> bool;

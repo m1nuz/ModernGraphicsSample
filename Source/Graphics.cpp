@@ -1,13 +1,11 @@
 #include "Graphics.hpp"
+#include "Common.hpp"
 #include "Hash.hpp"
 #include "Log.hpp"
 #include "Renderer.hpp"
 
 #define GLAD_GL_IMPLEMENTATION
 #include <glad/gl.h>
-
-#define STB_IMAGE_IMPLEMENTATION
-#include <stb_image.h>
 
 #include <cassert>
 #include <fstream>
@@ -261,6 +259,16 @@ auto findTexture(Device& device, uint64_t tag) -> Texture {
     return {};
 }
 
+auto findBuffer(Device& device, uint64_t tag) -> Buffer {
+    for (const auto& b : device.buffers_) {
+        if (b.tag == tag) {
+            return b;
+        }
+    }
+
+    return {};
+}
+
 auto findTextureHandleRef(Device& device, uint64_t handle) -> uint32_t {
     uint32_t idx = 0;
     for (const auto& h : device.textureHandles_) {
@@ -272,16 +280,6 @@ auto findTextureHandleRef(Device& device, uint64_t handle) -> uint32_t {
     }
 
     return idx;
-}
-
-auto findBuffer(Device& device, uint64_t tag) -> Buffer {
-    for (const auto& b : device.buffers_) {
-        if (b.tag == tag) {
-            return b;
-        }
-    }
-
-    return {};
 }
 
 auto findModelRef(Device& device, uint64_t tag) -> uint32_t {
@@ -316,28 +314,36 @@ auto loadPipeline(Device& device, uint64_t tag, std::span<const std::string_view
     createGraphicsPipeline(device, { .tag = tag, .stages = shaders });
 }
 
+auto Framebuffer::is_complete() const noexcept -> bool {
+    return status == GL_FRAMEBUFFER_COMPLETE;
+}
+
 auto createTexture2D(Device& device, const TextureConfiguration& conf) -> Texture {
     uint32_t id = 0u;
     glCreateTextures(GL_TEXTURE_2D, 1, &id);
 
-    uint32_t mipLevels = conf.mipLevels != 0 ? conf.mipLevels : std::max(1.0, std::log2(std::max(conf.width, conf.height)));
+    const uint32_t mipLevels = conf.mipLevels != 0 ? conf.mipLevels : std::max(1.0, std::log2(std::max(conf.width, conf.height)));
 
-    glTextureStorage2D(id, mipLevels, internalFormat(conf.format), conf.width, conf.height);
+    applyTextureFitering(id, conf.filter, mipLevels);
+    applyTextureWrap(id, conf.wrap, false);
+
+    if (conf.samples > 1) {
+        glTextureStorage2DMultisample(id, conf.samples, internalFormat(conf.format), conf.width, conf.height, true);
+    } else {
+        glTextureStorage2D(id, mipLevels, internalFormat(conf.format), conf.width, conf.height);
+    }
 
     if (!conf.pixels.empty()) {
         auto [format, type] = imageFormat(conf.format);
         glTextureSubImage2D(id, 0, 0, 0, conf.width, conf.height, format, type, std::data(conf.pixels));
     }
 
-    applyTextureFitering(id, conf.filter, mipLevels);
-    applyTextureWrap(id, conf.wrap, false);
-
     if (conf.generateMipMaps) {
         glGenerateTextureMipmap(id);
     }
 
     uint64_t handle = 0;
-    if (conf.bindless) {
+    if (conf.bindless && device.useBindlessTextures) {
         handle = glGetTextureHandleARB(id);
         glMakeTextureHandleResidentARB(handle);
 
@@ -345,6 +351,30 @@ auto createTexture2D(Device& device, const TextureConfiguration& conf) -> Textur
     }
 
     return device.textures_.emplace_back(conf.tag, id, GL_TEXTURE_2D, conf.width, conf.height, 0, mipLevels, handle);
+}
+
+auto createTextureCube(Device& device, const TextureCubeConfiguration& conf) -> Texture {
+    uint32_t id = 0u;
+    glCreateTextures(GL_TEXTURE_CUBE_MAP, 1, &id);
+
+    const uint32_t mipLevels = conf.mipLevels != 0 ? conf.mipLevels : std::max(1.0, std::log2(std::max(conf.width, conf.height)));
+
+    applyTextureFitering(id, conf.filter, mipLevels);
+    applyTextureWrap(id, conf.wrap, true);
+
+    glTextureStorage2D(id, mipLevels, internalFormat(conf.format), conf.width, conf.height);
+    for (size_t face = 0; face < conf.depth; ++face) {
+        auto [format, type] = imageFormat(conf.format);
+        const auto pixels
+            = conf.pixels.empty() ? nullptr : (conf.pixels[face].empty() ? nullptr : reinterpret_cast<const void*>(&conf.pixels[face][0]));
+        glTextureSubImage3D(id, 0, 0, 0, face, conf.width, conf.height, 1, format, type, pixels);
+    }
+
+    if (conf.generateMipMaps) {
+        glGenerateTextureMipmap(id);
+    }
+
+    return device.textures_.emplace_back(conf.tag, id, GL_TEXTURE_2D, conf.width, conf.height, 0, mipLevels, 0);
 }
 
 auto createShader(Device& device, const ShaderConfiguration& conf) -> Shader {
@@ -417,6 +447,104 @@ auto createBuffer(Device& device, const BufferConfiguration& conf) -> Buffer {
     return device.buffers_.emplace_back(conf.tag, id, conf.data.empty() ? conf.emptySize : std::size(conf.data));
 }
 
+auto createRenderbuffer(Device& device, const RenderBufferConfiguration& conf) -> Renderbuffer {
+    auto id = 0u;
+    glCreateRenderbuffers(1, &id);
+
+    auto iFormat = internalFormat(conf.format);
+
+    if (conf.samples == 0) {
+        glNamedRenderbufferStorage(id, static_cast<GLenum>(iFormat), static_cast<GLsizei>(conf.width), static_cast<GLsizei>(conf.height));
+    } else {
+        glNamedRenderbufferStorageMultisample(id, static_cast<GLsizei>(conf.samples), static_cast<GLenum>(iFormat),
+            static_cast<GLsizei>(conf.width), static_cast<GLsizei>(conf.height));
+    }
+
+    return device.renderbuffers_.emplace_back(conf.tag, id, GL_RENDERBUFFER, conf.width, conf.height, conf.samples);
+}
+
+auto createFramebuffer(Device& device, const FramebufferConfiguration& conf) -> Framebuffer {
+    auto id = 0u;
+    glCreateFramebuffers(1, &id);
+
+    uint32_t mask = 0;
+
+    for (const auto& attachment : conf.attachments) {
+        switch (attachment.attachment) {
+        case GL_COLOR_ATTACHMENT0:
+        case GL_COLOR_ATTACHMENT1:
+        case GL_COLOR_ATTACHMENT2:
+        case GL_COLOR_ATTACHMENT3:
+        case GL_COLOR_ATTACHMENT4:
+        case GL_COLOR_ATTACHMENT5:
+        case GL_COLOR_ATTACHMENT6:
+        case GL_COLOR_ATTACHMENT7:
+        case GL_COLOR_ATTACHMENT8:
+        case GL_COLOR_ATTACHMENT9:
+        case GL_COLOR_ATTACHMENT10:
+        case GL_COLOR_ATTACHMENT11:
+        case GL_COLOR_ATTACHMENT12:
+        case GL_COLOR_ATTACHMENT13:
+        case GL_COLOR_ATTACHMENT14:
+        case GL_COLOR_ATTACHMENT15:
+        case GL_COLOR_ATTACHMENT16:
+        case GL_COLOR_ATTACHMENT17:
+        case GL_COLOR_ATTACHMENT18:
+        case GL_COLOR_ATTACHMENT19:
+        case GL_COLOR_ATTACHMENT20:
+        case GL_COLOR_ATTACHMENT21:
+        case GL_COLOR_ATTACHMENT22:
+        case GL_COLOR_ATTACHMENT23:
+        case GL_COLOR_ATTACHMENT24:
+        case GL_COLOR_ATTACHMENT25:
+        case GL_COLOR_ATTACHMENT26:
+        case GL_COLOR_ATTACHMENT27:
+        case GL_COLOR_ATTACHMENT28:
+        case GL_COLOR_ATTACHMENT29:
+        case GL_COLOR_ATTACHMENT30:
+        case GL_COLOR_ATTACHMENT31:
+            mask |= GL_COLOR_BUFFER_BIT;
+            break;
+        case GL_DEPTH_ATTACHMENT:
+            mask |= GL_DEPTH_BUFFER_BIT;
+            break;
+        }
+
+        switch (attachment.attachmentTarget) {
+        case GL_TEXTURE_2D:
+        case GL_TEXTURE_CUBE_MAP_POSITIVE_X:
+        case GL_TEXTURE_CUBE_MAP_NEGATIVE_X:
+        case GL_TEXTURE_CUBE_MAP_POSITIVE_Y:
+        case GL_TEXTURE_CUBE_MAP_NEGATIVE_Y:
+        case GL_TEXTURE_CUBE_MAP_POSITIVE_Z:
+        case GL_TEXTURE_CUBE_MAP_NEGATIVE_Z:
+            glNamedFramebufferTexture(id, attachment.attachment, attachment.renderTarget, 0);
+            break;
+        case GL_RENDERBUFFER:
+            glNamedFramebufferRenderbuffer(id, attachment.attachment, GL_RENDERBUFFER, attachment.renderTarget);
+            break;
+        }
+    }
+
+    const auto status = glCheckNamedFramebufferStatus(id, GL_FRAMEBUFFER);
+
+    if (!conf.drawBuffers.empty()) {
+        glNamedFramebufferDrawBuffers(id, std::size(conf.drawBuffers), std::data(conf.drawBuffers));
+    }
+
+    uint32_t numDrawBuffers = conf.drawBuffers.empty() ? 1 : std::size(conf.drawBuffers);
+
+    if (conf.drawBuffer) {
+        glNamedFramebufferDrawBuffer(id, *conf.drawBuffer);
+    }
+
+    if (conf.readBuffer) {
+        glNamedFramebufferReadBuffer(id, *conf.readBuffer);
+    }
+
+    return device.framebuffers_.emplace_back(conf.tag, id, conf.width, conf.height, mask, status, numDrawBuffers);
+}
+
 static auto getShaderStage(std::string_view name) -> ShaderStage {
     if (name.find(".vert") != std::string_view::npos) {
         return ShaderStage::Vertex;
@@ -455,43 +583,6 @@ auto loadShader(Device& device, std::string_view filepath) -> void {
 
     createShader(
         device, { .tag = make_hash(filepath), .stage = getShaderStage(filepath), .filename = std::string { filepath }, .source = buf });
-}
-
-auto loadTexture(Device& device, std::string_view filepath) -> void {
-
-    // stbi_set_flip_vertically_on_load(true);
-
-    int width = 0, height = 0, channels = 0;
-    const int req_comp = STBI_default;
-
-    auto ptr = stbi_load(std::data(filepath), &width, &height, &channels, req_comp);
-
-    Format format = Format::Undefined;
-    if (channels == 2) {
-        format = Format::R8G8_UNORM;
-    } else if (channels == 3) {
-        format = Format::R8G8B8_UNORM;
-    } else if (channels == 4) {
-        format = Format::R8G8B8A8_UNORM;
-    }
-
-    size_t size = width * height * channels;
-
-    [[maybe_unused]] auto texture = createTexture2D(device,
-        { .tag = make_hash(filepath),
-            .width = static_cast<uint32_t>(width),
-            .height = static_cast<uint32_t>(height),
-            .format = format,
-            .mipLevels = 4,
-            .generateMipMaps = true,
-            .bindless = true,
-            .pixels = std::span { ptr, size } });
-
-    // if (texture.handle != 0) {
-    //     device.textureHandles_.push_back(texture.handle);
-    // }
-
-    stbi_image_free(ptr);
 }
 
 auto addMesh(Device& device, const Mesh& mesh) -> uint32_t {
@@ -546,7 +637,7 @@ auto addLight(Device& device, const Light& light) -> uint32_t {
     return std::size(device.lights_) - 1;
 }
 
-auto addDirectionalLight(Device& device, const CreateDirectionalLightConfiguration& conf) -> uint32_t {
+auto addDirectionalLight(Device& device, const DirectionalLightConfiguration& conf) -> uint32_t {
     device.reloadLightBuffers_ = true;
 
     Light light;
@@ -560,138 +651,215 @@ auto addDirectionalLight(Device& device, const CreateDirectionalLightConfigurati
     return std::size(device.lights_) - 1;
 }
 
-static auto createCube() -> MeshLOD {
-    MeshLOD mesh;
-
-    mesh.vertices = {
-        // +x
-        { { +0.5f, -0.5f, -0.5f }, { +1, 0, 0 }, { 1, 1 } },
-        { { +0.5f, +0.5f, -0.5f }, { +1, 0, 0 }, { 0, 1 } },
-        { { +0.5f, +0.5f, +0.5f }, { +1, 0, 0 }, { 0, 0 } },
-        { { +0.5f, -0.5f, +0.5f }, { +1, 0, 0 }, { 1, 0 } },
-
-        // -x
-        { { -0.5f, -0.5f, -0.5f }, { -1, 0, 0 }, { 1, 1 } },
-        { { -0.5f, +0.5f, -0.5f }, { -1, 0, 0 }, { 0, 1 } },
-        { { -0.5f, +0.5f, +0.5f }, { -1, 0, 0 }, { 0, 0 } },
-        { { -0.5f, -0.5f, +0.5f }, { -1, 0, 0 }, { 1, 0 } },
-
-        // +y
-
-        { { -0.5f, +0.5f, -0.5f }, { 0, +1, 0 }, { 1, 1 } },
-        { { +0.5f, +0.5f, -0.5f }, { 0, +1, 0 }, { 0, 1 } },
-        { { +0.5f, +0.5f, +0.5f }, { 0, +1, 0 }, { 0, 0 } },
-        { { -0.5f, +0.5f, +0.5f }, { 0, +1, 0 }, { 1, 0 } },
-
-        // -y
-        { { -0.5f, -0.5f, -0.5f }, { 0, -1, 0 }, { 1, 1 } },
-        { { +0.5f, -0.5f, -0.5f }, { 0, -1, 0 }, { 0, 1 } },
-        { { +0.5f, -0.5f, +0.5f }, { 0, -1, 0 }, { 0, 0 } },
-        { { -0.5f, -0.5f, +0.5f }, { 0, -1, 0 }, { 1, 0 } },
-
-        // +z
-        { { -0.5f, -0.5f, +0.5f }, { 0, 0, +1 }, { 1, 1 } },
-        { { +0.5f, -0.5f, +0.5f }, { 0, 0, +1 }, { 0, 1 } },
-        { { +0.5f, +0.5f, +0.5f }, { 0, 0, +1 }, { 0, 0 } },
-        { { -0.5f, +0.5f, +0.5f }, { 0, 0, +1 }, { 1, 0 } },
-
-        // -z
-        { { -0.5f, -0.5f, -0.5f }, { 0, 0, -1 }, { 1, 1 } },
-        { { +0.5f, -0.5f, -0.5f }, { 0, 0, -1 }, { 0, 1 } },
-        { { +0.5f, +0.5f, -0.5f }, { 0, 0, -1 }, { 0, 0 } },
-        { { -0.5f, +0.5f, -0.5f }, { 0, 0, -1 }, { 1, 0 } },
-
-    };
-
-    mesh.faces = {
-        // +x
-        { 0, 1, 2 },
-        { 0, 2, 3 },
-
-        // -x
-        { 4, 6, 5 },
-        { 4, 7, 6 },
-
-        // +y
-        { 8, 10, 9 },
-        { 8, 11, 10 },
-
-        // -y
-        { 12, 13, 14 },
-        { 12, 14, 15 },
-
-        // +z
-        { 16, 17, 18 },
-        { 16, 18, 19 },
-
-        // -z
-        { 20, 22, 21 },
-        { 20, 23, 22 },
-    };
-
-    return mesh;
+auto drawQuad(Device& device) -> void {
+    glBindVertexArray(device.fullscreenQuadVertexArray);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    glBindVertexArray(0);
 }
 
-static auto createSphere(uint32_t n) -> MeshLOD {
-    MeshLOD mesh;
+auto drawCube([[maybe_unused]] Device& device) -> void {
+    static uint32_t cubeVAO = 0;
+    static uint32_t cubeVBO = 0;
 
-    uint32_t sectors = pow(2, n);
-    uint32_t slices = pow(2, n);
-
-    for (uint j = 0; j <= slices; j++) {
-        for (uint i = 0; i <= sectors; i++) {
-            float phi = glm::pi<float>() * (-0.5f + float(j) / slices);
-            float theta = glm::pi<float>() * 2 * float(i) / sectors;
-
-            float factor = 0.75f;
-
-            float x = cos(phi) * cos(-theta) * factor;
-            float y = sin(phi) * factor;
-            float z = cos(phi) * sin(-theta) * factor;
-
-            float u = float(i) / sectors;
-            float v = 1 - float(j) / slices;
-
-            mesh.vertices.push_back({ { x, y, z }, { x, y, z }, { u, v } });
-
-            if (i < sectors && j < slices) {
-                uint32_t index_A = (j + 0) * (sectors + 1) + (i + 0);
-                uint32_t index_B = (j + 0) * (sectors + 1) + (i + 1);
-                uint32_t index_C = (j + 1) * (sectors + 1) + (i + 1);
-                uint32_t index_D = (j + 1) * (sectors + 1) + (i + 0);
-
-                mesh.faces.push_back({ index_A, index_B, index_C });
-                mesh.faces.push_back({ index_A, index_C, index_D });
-            }
-        }
+    if (cubeVAO == 0) {
+        float vertices[] = {
+            // back face
+            -1.0f, -1.0f, -1.0f, 0.0f, 0.0f, -1.0f, 0.0f, 0.0f, // bottom-left
+            1.0f, 1.0f, -1.0f, 0.0f, 0.0f, -1.0f, 1.0f, 1.0f, // top-right
+            1.0f, -1.0f, -1.0f, 0.0f, 0.0f, -1.0f, 1.0f, 0.0f, // bottom-right
+            1.0f, 1.0f, -1.0f, 0.0f, 0.0f, -1.0f, 1.0f, 1.0f, // top-right
+            -1.0f, -1.0f, -1.0f, 0.0f, 0.0f, -1.0f, 0.0f, 0.0f, // bottom-left
+            -1.0f, 1.0f, -1.0f, 0.0f, 0.0f, -1.0f, 0.0f, 1.0f, // top-left
+            // front face
+            -1.0f, -1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, // bottom-left
+            1.0f, -1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, // bottom-right
+            1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, // top-right
+            1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, // top-right
+            -1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f, // top-left
+            -1.0f, -1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, // bottom-left
+            // left face
+            -1.0f, 1.0f, 1.0f, -1.0f, 0.0f, 0.0f, 1.0f, 0.0f, // top-right
+            -1.0f, 1.0f, -1.0f, -1.0f, 0.0f, 0.0f, 1.0f, 1.0f, // top-left
+            -1.0f, -1.0f, -1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 1.0f, // bottom-left
+            -1.0f, -1.0f, -1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 1.0f, // bottom-left
+            -1.0f, -1.0f, 1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 0.0f, // bottom-right
+            -1.0f, 1.0f, 1.0f, -1.0f, 0.0f, 0.0f, 1.0f, 0.0f, // top-right
+            // right face
+            1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, // top-left
+            1.0f, -1.0f, -1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, // bottom-right
+            1.0f, 1.0f, -1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, // top-right
+            1.0f, -1.0f, -1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, // bottom-right
+            1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, // top-left
+            1.0f, -1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, // bottom-left
+            // bottom face
+            -1.0f, -1.0f, -1.0f, 0.0f, -1.0f, 0.0f, 0.0f, 1.0f, // top-right
+            1.0f, -1.0f, -1.0f, 0.0f, -1.0f, 0.0f, 1.0f, 1.0f, // top-left
+            1.0f, -1.0f, 1.0f, 0.0f, -1.0f, 0.0f, 1.0f, 0.0f, // bottom-left
+            1.0f, -1.0f, 1.0f, 0.0f, -1.0f, 0.0f, 1.0f, 0.0f, // bottom-left
+            -1.0f, -1.0f, 1.0f, 0.0f, -1.0f, 0.0f, 0.0f, 0.0f, // bottom-right
+            -1.0f, -1.0f, -1.0f, 0.0f, -1.0f, 0.0f, 0.0f, 1.0f, // top-right
+            // top face
+            -1.0f, 1.0f, -1.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, // top-left
+            1.0f, 1.0f, 1.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f, // bottom-right
+            1.0f, 1.0f, -1.0f, 0.0f, 1.0f, 0.0f, 1.0f, 1.0f, // top-right
+            1.0f, 1.0f, 1.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f, // bottom-right
+            -1.0f, 1.0f, -1.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, // top-left
+            -1.0f, 1.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f // bottom-left
+        };
+        glGenVertexArrays(1, &cubeVAO);
+        glGenBuffers(1, &cubeVBO);
+        // fill buffer
+        glBindBuffer(GL_ARRAY_BUFFER, cubeVBO);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+        // link vertex attributes
+        glBindVertexArray(cubeVAO);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(3 * sizeof(float)));
+        glEnableVertexAttribArray(2);
+        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(6 * sizeof(float)));
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        glBindVertexArray(0);
     }
-
-    return mesh;
+    // render Cube
+    glBindVertexArray(cubeVAO);
+    glDrawArrays(GL_TRIANGLES, 0, 36);
+    glBindVertexArray(0);
 }
 
-static auto createMesh(const CreateMeshConfiguration& conf) -> Mesh {
-    if (conf.cube) {
-        Mesh mesh;
-        mesh.LODs[0] = createCube();
+// static auto createCube() -> MeshLOD {
+//     MeshLOD mesh;
 
-        return mesh;
-    } else if (conf.sphere) {
-        Mesh sphere;
+//     mesh.vertices = {
+//         // +x
+//         { { +0.5f, -0.5f, -0.5f }, { +1, 0, 0 }, { 1, 1 } },
+//         { { +0.5f, +0.5f, -0.5f }, { +1, 0, 0 }, { 0, 1 } },
+//         { { +0.5f, +0.5f, +0.5f }, { +1, 0, 0 }, { 0, 0 } },
+//         { { +0.5f, -0.5f, +0.5f }, { +1, 0, 0 }, { 1, 0 } },
 
-        for (size_t i = 0; i < MaxMeshLODs; i++) {
-            sphere.LODs[i] = createSphere(*conf.sphere - i);
-        }
+//         // -x
+//         { { -0.5f, -0.5f, -0.5f }, { -1, 0, 0 }, { 1, 1 } },
+//         { { -0.5f, +0.5f, -0.5f }, { -1, 0, 0 }, { 0, 1 } },
+//         { { -0.5f, +0.5f, +0.5f }, { -1, 0, 0 }, { 0, 0 } },
+//         { { -0.5f, -0.5f, +0.5f }, { -1, 0, 0 }, { 1, 0 } },
 
-        return sphere;
-    }
+//         // +y
 
-    return {};
-}
+//         { { -0.5f, +0.5f, -0.5f }, { 0, +1, 0 }, { 1, 1 } },
+//         { { +0.5f, +0.5f, -0.5f }, { 0, +1, 0 }, { 0, 1 } },
+//         { { +0.5f, +0.5f, +0.5f }, { 0, +1, 0 }, { 0, 0 } },
+//         { { -0.5f, +0.5f, +0.5f }, { 0, +1, 0 }, { 1, 0 } },
 
-auto createMesh(Device& device, const CreateMeshConfiguration& conf) -> uint32_t {
-    auto mesh = createMesh(conf);
-    return addMesh(device, mesh);
-}
+//         // -y
+//         { { -0.5f, -0.5f, -0.5f }, { 0, -1, 0 }, { 1, 1 } },
+//         { { +0.5f, -0.5f, -0.5f }, { 0, -1, 0 }, { 0, 1 } },
+//         { { +0.5f, -0.5f, +0.5f }, { 0, -1, 0 }, { 0, 0 } },
+//         { { -0.5f, -0.5f, +0.5f }, { 0, -1, 0 }, { 1, 0 } },
+
+//         // +z
+//         { { -0.5f, -0.5f, +0.5f }, { 0, 0, +1 }, { 1, 1 } },
+//         { { +0.5f, -0.5f, +0.5f }, { 0, 0, +1 }, { 0, 1 } },
+//         { { +0.5f, +0.5f, +0.5f }, { 0, 0, +1 }, { 0, 0 } },
+//         { { -0.5f, +0.5f, +0.5f }, { 0, 0, +1 }, { 1, 0 } },
+
+//         // -z
+//         { { -0.5f, -0.5f, -0.5f }, { 0, 0, -1 }, { 1, 1 } },
+//         { { +0.5f, -0.5f, -0.5f }, { 0, 0, -1 }, { 0, 1 } },
+//         { { +0.5f, +0.5f, -0.5f }, { 0, 0, -1 }, { 0, 0 } },
+//         { { -0.5f, +0.5f, -0.5f }, { 0, 0, -1 }, { 1, 0 } },
+
+//     };
+
+//     mesh.faces = {
+//         // +x
+//         { 0, 1, 2 },
+//         { 0, 2, 3 },
+
+//         // -x
+//         { 4, 6, 5 },
+//         { 4, 7, 6 },
+
+//         // +y
+//         { 8, 10, 9 },
+//         { 8, 11, 10 },
+
+//         // -y
+//         { 12, 13, 14 },
+//         { 12, 14, 15 },
+
+//         // +z
+//         { 16, 17, 18 },
+//         { 16, 18, 19 },
+
+//         // -z
+//         { 20, 22, 21 },
+//         { 20, 23, 22 },
+//     };
+
+//     return mesh;
+// }
+
+// static auto createSphere(uint32_t n) -> MeshLOD {
+//     MeshLOD mesh;
+
+//     uint32_t sectors = pow(2, n);
+//     uint32_t slices = pow(2, n);
+
+//     for (uint j = 0; j <= slices; j++) {
+//         for (uint i = 0; i <= sectors; i++) {
+//             float phi = glm::pi<float>() * (-0.5f + float(j) / slices);
+//             float theta = glm::pi<float>() * 2 * float(i) / sectors;
+
+//             float factor = 0.75f;
+
+//             float x = cos(phi) * cos(-theta) * factor;
+//             float y = sin(phi) * factor;
+//             float z = cos(phi) * sin(-theta) * factor;
+
+//             float u = float(i) / sectors;
+//             float v = 1 - float(j) / slices;
+
+//             mesh.vertices.push_back({ { x, y, z }, { x, y, z }, { u, v } });
+
+//             if (i < sectors && j < slices) {
+//                 uint32_t index_A = (j + 0) * (sectors + 1) + (i + 0);
+//                 uint32_t index_B = (j + 0) * (sectors + 1) + (i + 1);
+//                 uint32_t index_C = (j + 1) * (sectors + 1) + (i + 1);
+//                 uint32_t index_D = (j + 1) * (sectors + 1) + (i + 0);
+
+//                 mesh.faces.push_back({ index_A, index_B, index_C });
+//                 mesh.faces.push_back({ index_A, index_C, index_D });
+//             }
+//         }
+//     }
+
+//     return mesh;
+// }
+
+// static auto createMesh(const CreateMeshConfiguration& conf) -> Mesh {
+//     if (conf.cube) {
+//         Mesh mesh;
+//         mesh.LODs[0] = createCube();
+
+//         return mesh;
+//     } else if (conf.sphere) {
+//         Mesh sphere;
+
+//         for (size_t i = 0; i < MaxMeshLODs; i++) {
+//             sphere.LODs[i] = createSphere(*conf.sphere - i);
+//         }
+
+//         return sphere;
+//     }
+
+//     return {};
+// }
+
+// auto createMesh(Device& device, const CreateMeshConfiguration& conf) -> uint32_t {
+//     auto mesh = createMesh(conf);
+//     return addMesh(device, mesh);
+// }
 
 // static auto createMaterial(const CreateMaterialConfiguration& conf) -> Material {
 //     Material material;

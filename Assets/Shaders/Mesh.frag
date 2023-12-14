@@ -4,14 +4,6 @@
 
 const float PI = 3.14159265359;
 
-// struct Material {
-//     uint Kd;
-//     uint Ks;
-//     float Ns;
-//     float d;
-//     uint MapKd;
-// };
-
 struct PBRMetallicRoughnessMaterial {
     vec4 baseColor;
     float metallicFactor;
@@ -59,10 +51,17 @@ layout(std430, binding = 8) readonly buffer LightIndicesBlock {
 
 layout(location = 1) uniform vec3 viewPos;
 
+// IBL
+layout(location = 2) uniform bool computeIBL;
+layout(binding = 10) uniform samplerCube irradianceMap;
+layout(binding = 11) uniform samplerCube prefilterMap;
+layout(binding = 12) uniform sampler2D brdfLUT;
+
 in VS_out {
-    smooth vec3 FragPos;
-    smooth vec3 Normal;
-    smooth vec2 TexCoord;
+    mat3 TBN;
+    vec3 FragPos;
+    // vec3 Normal;
+    vec2 TexCoord;
     flat uint drawID;
 }
 fs_in;
@@ -123,6 +122,10 @@ vec3 fresnelSchlick(float cosTheta, vec3 F0) {
     return max(F0 + (1.0 - F0) * pow(2.0, (-5.55473 * cosTheta - 6.98316) * cosTheta), 0.0);
 }
 
+vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
+    return F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
 vec3 CalculateDirectionalLightRadiance(Light light, vec3 albedo, float metallic, float roughness, vec3 F0, vec3 fragPos, vec3 N, vec3 V) {
     vec3 L = normalize(-light.position);
     vec3 H = normalize(V + L);
@@ -151,23 +154,38 @@ vec3 CalculatePointLightRadiance(vec3 albedo, float metallic, float roughness, v
     return Lo;
 }
 
+vec3 sRGB_to_Linear(vec3 sRGBColor) {
+    // Apply the inverse gamma correction for each channel
+    return mix(pow(sRGBColor.rgb * 0.9478672986 + 0.0521327014, vec3(2.4)), sRGBColor.rgb * 0.04045 / 12.92,
+        lessThanEqual(sRGBColor.rgb, vec3(0.04045)));
+    // return pow(sRGBColor, vec3(2.2));
+}
+
 void main() {
     uint material_index = drawables[fs_in.drawID].x;
 
     sampler2D baseColorMap = sampler2D(textureHandles[materials[material_index].pbrMetallicRoughness.baseColorTexture]);
     sampler2D metallicRoughnessMap = sampler2D(textureHandles[materials[material_index].pbrMetallicRoughness.metallicRoughnessTexture]);
     sampler2D occlusionMap = sampler2D(textureHandles[materials[material_index].occlusionTexture]);
+    sampler2D emissiveMap = sampler2D(textureHandles[materials[material_index].emissiveTexture]);
 
     vec3 albedo = texture(baseColorMap, fs_in.TexCoord).rgb;
-    float metallic = texture(metallicRoughnessMap, fs_in.TexCoord).r;
     float roughness = texture(metallicRoughnessMap, fs_in.TexCoord).g;
+    float metallic = texture(metallicRoughnessMap, fs_in.TexCoord).b;
     float occlusion = texture(occlusionMap, fs_in.TexCoord).r;
+    vec3 emission = materials[material_index].emissiveFactor * sRGB_to_Linear(texture(emissiveMap, fs_in.TexCoord).rgb)
+        * materials[material_index].emissiveStrength;
 
     // vec3 N = normalize(fs_in.Normal);
-    vec3 N = getNormalFromMap(fs_in.FragPos, fs_in.Normal, material_index);
-    vec3 L = normalize(-lights[0].position);
-    vec3 R = reflect(-L, N);
+    // vec3 N = getNormalFromMap(fs_in.FragPos, fs_in.Normal, material_index);
+    sampler2D normalMap = sampler2D(textureHandles[materials[material_index].normalTexture]);
+    vec3 tangentNormal = texture(normalMap, fs_in.TexCoord).xyz * 2.0 - 1.0;
+
+    vec3 N = normalize(fs_in.TBN * tangentNormal);
     vec3 V = normalize(viewPos - fs_in.FragPos);
+    vec3 R = reflect(-V, N);
+
+    vec3 L = normalize(-lights[0].position);
 
     vec3 F0 = vec3(0.04);
     F0 = mix(F0, albedo, metallic);
@@ -176,7 +194,32 @@ void main() {
     Lo += CalculateDirectionalLightRadiance(lights[0], albedo, metallic, roughness, F0, fs_in.FragPos, N, V);
     Lo += CalculatePointLightRadiance(albedo, metallic, roughness, F0, fs_in.FragPos, N, V);
 
-    vec3 Ia = vec3(0.1) * albedo * occlusion;
+    vec3 Ia = vec3(0.05) * albedo * occlusion;
+    if (computeIBL) {
+        vec3 F = fresnelSchlickRoughness(max(dot(N, V), 0.0), F0, roughness);
 
-    FragColor = vec4(Lo + Ia, 1.0);
+        vec3 kS = F;
+        vec3 kD = 1.0 - kS;
+        kD *= 1.0 - metallic;
+
+        vec3 Id = texture(irradianceMap, N).rgb * albedo * kD;
+
+        const float MAX_REFLECTION_LOD = 4.0;
+        vec3 prefilteredColor = textureLod(prefilterMap, R, roughness * MAX_REFLECTION_LOD).rgb;
+        vec2 brdf = texture(brdfLUT, vec2(max(dot(N, V), 0.0), roughness)).rg;
+
+        vec3 Is = prefilteredColor * (F * brdf.x + brdf.y);
+
+        Ia = (Id + Is) * occlusion;
+    }
+
+    // FragColor = vec4(albedo, 1.0);
+    // FragColor = vec4(vec3(roughness), 1.0);
+    // FragColor = vec4(vec3(metallic), 1.0);
+    // FragColor = vec4(vec3(occlusion), 1.0);
+    // FragColor = vec4(N, 1.0);
+    // FragColor = vec4(F0, 1.0);
+    // FragColor = vec4(Lo, 1.0);
+    // FragColor = vec4(Ia, 1.0);
+    FragColor = vec4(Lo + Ia + emission, 1.0);
 }

@@ -64,6 +64,7 @@ struct Vertex {
     vec3 position { 0.f };
     vec3 normal { 0.f };
     vec2 uv { 0.f };
+    vec3 tangent { 0.f };
 };
 
 struct BoundingSphere {
@@ -194,6 +195,15 @@ struct Buffer {
     uint32_t size = 0;
 };
 
+struct Renderbuffer {
+    uint64_t tag = 0;
+    uint32_t id = 0;
+    uint32_t target = 0;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint32_t samples = 0;
+};
+
 struct Framebuffer {
     auto is_valid() const noexcept -> bool {
         return id != 0;
@@ -219,12 +229,28 @@ struct TextureConfiguration {
     uint32_t width { 0 };
     uint32_t height { 0 };
     Format format { Format::Undefined };
+    uint32_t samples { 0 };
     uint32_t mipLevels { 0 };
     bool generateMipMaps { false };
     bool bindless { false };
     TextureFiltering filter = TextureFiltering::Nearest;
     TextureWrap wrap = TextureWrap::None;
     std::span<const uint8_t> pixels {};
+};
+
+struct TextureCubeConfiguration {
+    uint64_t tag;
+    uint32_t width { 0 };
+    uint32_t height { 0 };
+    uint32_t depth { 0 };
+    Format format { Format::Undefined };
+    uint32_t samples { 0 };
+    uint32_t mipLevels { 0 };
+    bool generateMipMaps { false };
+    bool bindless { false };
+    TextureFiltering filter = TextureFiltering::Nearest;
+    TextureWrap wrap = TextureWrap::None;
+    std::span<std::span<const uint8_t>> pixels {};
 };
 
 struct ShaderConfiguration {
@@ -245,6 +271,32 @@ struct BufferConfiguration {
     size_t emptySize = 0;
 };
 
+struct RenderBufferConfiguration {
+    uint64_t tag = 0;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    Format format = Format::Undefined;
+    uint32_t samples = 0;
+};
+
+struct FramebufferAttachment {
+    uint32_t attachment = 0;
+    uint32_t attachmentTarget = 0;
+    uint32_t renderTarget = 0;
+};
+
+struct FramebufferConfiguration {
+    uint64_t tag = 0;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint32_t mask = 0;
+
+    std::span<const FramebufferAttachment> attachments = {};
+    std::span<const uint32_t> drawBuffers {};
+    std::optional<uint32_t> drawBuffer {};
+    std::optional<uint32_t> readBuffer {};
+};
+
 struct CreateMeshConfiguration {
     std::optional<bool> cube { std::nullopt };
     std::optional<uint32_t> sphere { std::nullopt };
@@ -258,14 +310,14 @@ struct CreateMaterialConfiguration {
     std::string_view KdMapName {};
 };
 
-struct CreatePointLight {
+struct PointLightConfiguration {
     vec3 position { 0.f };
     vec3 color { 0.f };
     float intensity { 0.f };
     float radius { 0.f };
 };
 
-struct CreateDirectionalLightConfiguration {
+struct DirectionalLightConfiguration {
     vec3 direction { 0.f };
     vec3 color { 0.f };
     float intensity { 0.f };
@@ -274,9 +326,12 @@ struct CreateDirectionalLightConfiguration {
 struct Device;
 
 auto createTexture2D(Device& device, const TextureConfiguration& conf) -> Texture;
+auto createTextureCube(Device& device, const TextureCubeConfiguration& info) -> Texture;
 auto createShader(Device& device, const ShaderConfiguration& conf) -> Shader;
 auto createGraphicsPipeline(Device& device, const PipelineConfiguration& conf) -> Pipeline;
 auto createBuffer(Device& device, const BufferConfiguration& conf) -> Buffer;
+auto createRenderbuffer(Device& device, const RenderBufferConfiguration& conf) -> Renderbuffer;
+auto createFramebuffer(Device& device, const FramebufferConfiguration& conf) -> Framebuffer;
 
 auto loadShader(Device& device, std::string_view filepath) -> void;
 auto loadPipeline(Device& device, uint64_t tag, std::span<const std::string_view> shaderNames) -> void;
@@ -286,7 +341,7 @@ auto loadModel(Device& device, std::string_view filepath) -> void;
 auto addMesh(Device& device, const Mesh& mesh) -> uint32_t;
 auto addMaterial(Device& device, const Material& material) -> uint32_t;
 auto addLight(Device& device, const Light& light) -> uint32_t;
-auto addDirectionalLight(Device& device, const CreateDirectionalLightConfiguration& conf) -> uint32_t;
+auto addDirectionalLight(Device& device, const DirectionalLightConfiguration& conf) -> uint32_t;
 
 auto createMesh(Device& device, const CreateMeshConfiguration& conf) -> uint32_t;
 auto createMaterial(Device& device, const CreateMaterialConfiguration& conf) -> uint32_t;
@@ -294,8 +349,11 @@ auto createMaterial(Device& device, const CreateMaterialConfiguration& conf) -> 
 auto findShader(Device& device, uint64_t tag) -> Shader;
 auto findPipeline(Device& device, uint64_t tag) -> Pipeline;
 auto findTexture(Device& device, uint64_t tag) -> Texture;
-auto findTextureHandleRef(Device& device, uint64_t handle) -> uint32_t;
 auto findBuffer(Device& device, uint64_t tag) -> Buffer;
+auto findTextureHandleRef(Device& device, uint64_t handle) -> uint32_t;
 auto findModelRef(Device& device, uint64_t tag) -> uint32_t;
+
+auto drawQuad(Device& device) -> void;
+auto drawCube(Device& device) -> void;
 
 } // namespace Graphics

@@ -1,3 +1,4 @@
+#include "Common.hpp"
 #include "Graphics.hpp"
 #include "Hash.hpp"
 #include "Log.hpp"
@@ -15,17 +16,6 @@
 
 namespace Graphics {
 
-auto getFilePathExt(std::string_view filepath) -> std::string_view {
-    if (auto pos = filepath.find_last_of('.'); pos != std::string_view::npos) {
-        return filepath.substr(pos);
-    }
-
-    return {};
-}
-
-auto processMesh() -> void {
-}
-
 auto processTextures(Device& device, const tinygltf::Model& model) -> std::vector<Texture> {
     std::vector<Texture> textures;
     textures.resize(std::size(model.textures));
@@ -35,7 +25,7 @@ auto processTextures(Device& device, const tinygltf::Model& model) -> std::vecto
         const auto& sampler = model.samplers[model.textures[i].sampler];
 
         [[maybe_unused]] bool generateMipMaps = true;
-        [[maybe_unused]] TextureFiltering filtering { TextureFiltering::Bilinear };
+        [[maybe_unused]] TextureFiltering filtering { TextureFiltering::Trilinear };
         [[maybe_unused]] TextureWrap wrap { TextureWrap::None };
         if (model.textures[i].sampler != -1) {
             if (sampler.minFilter == TINYGLTF_TEXTURE_FILTER_NEAREST && sampler.magFilter == TINYGLTF_TEXTURE_FILTER_NEAREST) {
@@ -124,6 +114,15 @@ auto processMaterials(Device& device, const tinygltf::Model& model, std::span<co
 
         if (importedMaterial.occlusionTexture.index != -1) {
             m.occlusionTexture = findTextureHandleRef(device, allTextures[importedMaterial.occlusionTexture.index].handle);
+        }
+
+        if (importedMaterial.emissiveTexture.index != -1) {
+            m.emissiveTexture = findTextureHandleRef(device, allTextures[importedMaterial.emissiveTexture.index].handle);
+
+            if (m.emissiveFactor == vec3 { 0.f }) {
+                m.emissiveFactor = vec3 { 1.f };
+                m.emissiveStrength = 1.f;
+            }
         }
 
         materials.push_back(addMaterial(device, m));
@@ -308,6 +307,57 @@ static auto optimizeMesh(const std::vector<Vertex>& meshVertices, const std::vec
     return { simplifiedVertices, simplifiedIndices };
 }
 
+static auto calculateTangentSpace(std::vector<Vertex>& vertices, std::vector<uint32_t>& indices) {
+    for (size_t i = 0; i < indices.size(); i += 3) {
+        // Get the vertices of the triangle
+        vec3& v0 = vertices[indices[i]].position;
+        vec3& v1 = vertices[indices[i + 1]].position;
+        vec3& v2 = vertices[indices[i + 2]].position;
+
+        // Get the texture coordinates of the triangle
+        vec2& uv0 = vertices[indices[i]].uv;
+        vec2& uv1 = vertices[indices[i + 1]].uv;
+        vec2& uv2 = vertices[indices[i + 2]].uv;
+
+        // Calculate the edges of the triangle
+        vec3 deltaPos1 = v1 - v0;
+        vec3 deltaPos2 = v2 - v0;
+
+        // Calculate the UV differences
+        vec2 deltaUV1 = uv1 - uv0;
+        vec2 deltaUV2 = uv2 - uv0;
+
+        // Calculate the tangent and bitangent vectors
+        float f = 1.0f / (deltaUV1.x * deltaUV2.y - deltaUV2.x * deltaUV1.y);
+
+        vec3 tangent;
+        tangent.x = f * (deltaUV2.y * deltaPos1.x - deltaUV1.y * deltaPos2.x);
+        tangent.y = f * (deltaUV2.y * deltaPos1.y - deltaUV1.y * deltaPos2.y);
+        tangent.z = f * (deltaUV2.y * deltaPos1.z - deltaUV1.y * deltaPos2.z);
+        tangent = normalize(tangent);
+
+        vec3 bitangent;
+        bitangent.x = f * (-deltaUV2.x * deltaPos1.x + deltaUV1.x * deltaPos2.x);
+        bitangent.y = f * (-deltaUV2.x * deltaPos1.y + deltaUV1.x * deltaPos2.y);
+        bitangent.z = f * (-deltaUV2.x * deltaPos1.z + deltaUV1.x * deltaPos2.z);
+        bitangent = normalize(bitangent);
+
+        // Update the vertices with tangent and bitangent information
+        vertices[indices[i]].tangent += tangent;
+        vertices[indices[i + 1]].tangent += tangent;
+        vertices[indices[i + 2]].tangent += tangent;
+
+        vertices[indices[i]].tangent += bitangent;
+        vertices[indices[i + 1]].tangent += bitangent;
+        vertices[indices[i + 2]].tangent += bitangent;
+    }
+
+    // Normalize the tangent vectors for each vertex
+    for (size_t i = 0; i < vertices.size(); ++i) {
+        vertices[i].tangent = normalize(vertices[i].tangent);
+    }
+}
+
 static auto processScene(Device& device, const tinygltf::Model& importedModel, [[maybe_unused]] std::span<const uint32_t> allMaterials,
     [[maybe_unused]] size_t sceneIndex) -> Model {
 
@@ -318,6 +368,8 @@ static auto processScene(Device& device, const tinygltf::Model& importedModel, [
             auto vertices = convertVertexBufferFormat(importedModel, primitive);
             auto indices = convertIndexBufferFormat(importedModel, primitive);
 
+            calculateTangentSpace(vertices, indices);
+
             Mesh m;
 
             bool simplify = false;
@@ -326,7 +378,7 @@ static auto processScene(Device& device, const tinygltf::Model& importedModel, [
 
             for (size_t j = 0; j < MaxMeshLODs; j++) {
                 if (j == MaxMeshLODs - 1) {
-                    targetError = 0.1f;
+                    targetError = 0.01f;
                 }
 
                 auto [optVertices, optIndices] = optimizeMesh(

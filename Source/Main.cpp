@@ -93,6 +93,8 @@ static auto showRendererOptions() {
     ImGui::Checkbox("Instance culling", &device.culling);
     ImGui::TextUnformatted(fmt::format("Draw instances: {}", device.drawInstances).c_str());
     ImGui::TextUnformatted(fmt::format("Visible instances: {}", device.visibleInstances).c_str());
+    ImGui::SliderFloat("exposure", &device.exposure, 0.f, 5.0);
+    ImGui::SliderFloat("gamma", &device.gamma, 0.f, 5.0);
     ImGui::End();
 }
 
@@ -157,14 +159,14 @@ int main() {
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init(glsl_version);
 
-    constexpr int N = 4;
+    constexpr int N = 2;
 
-    if (!Graphics::initialize(device, { .window = window, .numObjects = N * N * N })) {
+    if (!Graphics::initialize(device, { .window = window, .numEntities = N * N * N })) {
         glfwTerminate();
         return EXIT_FAILURE;
     }
 
-    Graphics::addDirectionalLight(device, { .direction = { 0.f, 10.f, 10.f }, .color = vec3 { 1.f, 1.f, 1.f }, .intensity = 1.f });
+    Graphics::addDirectionalLight(device, { .direction = { 0.f, -5.f, -5.f }, .color = vec3 { 1.f, 1.f, 1.f }, .intensity = 1.f });
 
     // std::string_view modelName = RESOURCE_PATH "/Models/BoxTextured/BoxTextured.gltf";
     // std::string_view modelName = RESOURCE_PATH "/Models/Duck/Duck.gltf";
@@ -177,13 +179,15 @@ int main() {
     // Graphics::Entity entity1;
     // entity1.modelRef = Graphics::findModelRef(device, make_hash(modelName));
     // entity1.transform = glm::translate(mat4 { 1.f }, vec3(0.f));
-    // entity1.transform = glm::scale(entity1.transform, vec3 { 0.02f });
+    // entity1.transform = glm::rotate(entity1.transform, glm::radians(90.f), vec3 { 1.f, 0.f, 0.f });
+    // entity1.transform = glm::scale(entity1.transform, vec3 { 2.f });
     // entities.push_back(entity1);
     for (int x = -N; x <= N; x++) {
         for (int y = -N; y <= N; y++) {
             for (int z = -N; z <= N; z++) {
                 Graphics::Entity entity;
                 entity.transform = glm::translate(mat4 { 1.f }, vec3 { x * 1.5f, y * 1.5f, z * 1.5f });
+                entity.transform = glm::rotate(entity.transform, glm::radians(90.f), vec3 { 1.f, 0.f, 0.f });
                 entity.transform = glm::scale(entity.transform, vec3 { 0.8f });
                 entity.modelRef = Graphics::findModelRef(device, make_hash(modelName));
 
